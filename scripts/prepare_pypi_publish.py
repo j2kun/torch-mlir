@@ -17,7 +17,14 @@ If a workflow fails partway through uploading wheels to PyPI, do NOT start a new
 `workflow_dispatch` run for the same version tag (rebuilding wheels produces new
 zip timestamps/hashes and will trigger a SHA256 collision error). Instead, click
 "Re-run failed jobs" on the existing workflow run in the GitHub Actions UI so the
-original build artifacts are reused and already-published wheels are pruned.
+original build artifacts are reused.
+
+Note that this preflight does NOT run again on that retry: it already succeeded,
+and "Re-run failed jobs" only re-runs the failed publishing job. The artifact it
+re-downloads still lists every wheel that was missing before the first attempt,
+including the ones that attempt published, so the publishing job uses the
+`skip-existing: true` option of `pypa/gh-action-pypi-publish` to tolerate them.
+
 """
 
 import argparse

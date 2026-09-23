@@ -253,8 +253,14 @@ jobs:
   #      will fail closed in `prepare_pypi_publish.py` due to PyPI immutability.
   #   2. Instead, click "Re-run failed jobs" on THIS existing workflow run in
   #      the GitHub Actions UI. This re-downloads the original wheel artifacts
-  #      with identical SHA256 hashes, prunes already-published wheels, and
-  #      idempotently uploads only the remaining missing wheels.
+  #      with identical SHA256 hashes and uploads the wheels PyPI is missing.
+  #   3. Note what that does NOT do: `prepare_pypi` already succeeded, so it is
+  #      not re-run and `pypi-ready-dist` is not re-pruned. The retry re-offers
+  #      every wheel that was missing before the FIRST attempt, including the
+  #      ones that attempt managed to publish. PyPI rejects any filename it
+  #      already has, so the publish step below sets `skip-existing: true`;
+  #      without it the retry dies on the first already-published wheel and the
+  #      release can never be completed from this run.
   # ============================================================================
   pypi_upload:
     name: Publish wheels to PyPI
@@ -266,6 +272,8 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+    # This job holds the OIDC token, so it deliberately contains no project
+    # code: it downloads an artifact and hands it to the pinned publisher.
     steps:
       - name: Download PyPI-ready wheels
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -278,3 +286,8 @@ jobs:
         with:
           packages-dir: dist
           verbose: true
+          # Lets "Re-run failed jobs" finish a partial upload; see the runbook
+          # above. Immutability is enforced ahead of this job by the preflight
+          # in prepare_pypi, which fails closed if PyPI already serves any of
+          # these filenames with different content.
+          skip-existing: true
