@@ -135,25 +135,52 @@ jobs:
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "is_dev=$IS_DEV" >> "$GITHUB_OUTPUT"
 
-      - name: Prune old dev-wheels assets (enforce 1,000 asset ceiling)
+      - name: Check out repo for dev-wheels pruning
+        if: ${{ steps.tag.outputs.is_dev == 'true' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/heads/main
+          # Scoped to `repo/` rather than the workspace root: actions/checkout
+          # deletes the contents of its target directory when that directory is
+          # not already a matching git clone, which would wipe the `dist/` and
+          # `extracted/` payloads that the upload step below publishes.
+          path: repo
+
+      - name: Install Python 3.12 for dev-wheels pruning
+        if: ${{ steps.tag.outputs.is_dev == 'true' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      # GitHub caps a release at 1,000 assets. Retention is expressed in days
+      # but enforced as an asset count:
+      #   assets_per_run * retention_days + persistent_assets
+      # For the current matrix that is 12 * 60 + 4 = 724, where the 4 persistent
+      # assets are the unversioned torch-mlir-opt binaries, counted from the
+      # release at runtime. Assets are pruned in whole version groups, since the
+      # matrix emits one wheel per (platform x Python ABI) pair and deleting
+      # individual assets oldest-first would leave the oldest retained version
+      # missing a platform or ABI. See scripts/prune_release_assets.py.
+      - name: Prune old dev-wheels assets
         if: ${{ steps.tag.outputs.is_dev == 'true' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # 4 wheels per dev release, gives 100 remaining assets as a buffer
-          MAX_ASSETS=225
-          REPO="${{ github.repository }}"
-          ASSETS_JSON=$(gh api "repos/${REPO}/releases/tags/dev-wheels" --jq '.assets | sort_by(.created_at)' 2>/dev/null || echo "[]")
-          TOTAL_COUNT=$(echo "$ASSETS_JSON" | jq 'length')
-          if [ "$TOTAL_COUNT" -gt "$MAX_ASSETS" ]; then
-            DELETE_COUNT=$((TOTAL_COUNT - MAX_ASSETS))
-            ASSET_IDS=$(echo "$ASSETS_JSON" | jq -r ".[0:${DELETE_COUNT}][].id")
-            for asset_id in $ASSET_IDS; do
-              gh api --method DELETE "repos/${REPO}/releases/assets/${asset_id}"
-            done
-          fi
+          pip install requests==2.32.3 packaging==24.2
+          # --incoming is the number of wheels a single run uploads: 4 platforms
+          # x 3 CPython builds. Hardcoded rather than counted from dist/ so that
+          # a short build cannot shrink the threshold and delete extra wheels;
+          # pruning is irreversible. Keep in sync with the matrix in
+          # _build_wheels.yml and the `build` setting in pyproject.toml.
+          python repo/scripts/prune_release_assets.py \
+            --repo "${{ github.repository }}" \
+            --tag dev-wheels \
+            --package torch-mlir \
+            --retention-days 60 \
+            --hard-limit 990 \
+            --incoming 12
 
       - name: Create/Update Dev Release
         if: ${{ steps.tag.outputs.is_dev == 'true' }}
